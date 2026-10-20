@@ -1,6 +1,7 @@
 import type { Logger } from "pino";
 import { proto, type Contact, type WASocket, type WAMessage } from "@whiskeysockets/baileys";
 import { jidToPhone } from "@/shared/phone";
+import { keys, redis } from "@/shared/redis";
 import { upsertContacts, type ContactInput } from "@/modules/contacts/repository";
 import { replaceGroups } from "@/modules/groups/repository";
 import { bumpStatus, logIncoming } from "@/modules/messaging/repository";
@@ -44,6 +45,11 @@ export function registerHandlers(sock: WASocket, sessionId: string, log: Logger)
         if (!phone) return;
         const body = textOf(m);
         await logIncoming({ sessionId, phone, body: body.slice(0, 4000), waMessageId: m.key.id ?? undefined });
+        // Balasan dari orang yang baru kita kirimi: tandai dibaca setelah jeda manusiawi.
+        // Percakapan dua arah yang 'dibaca' adalah sinyal akun normal, bukan bot broadcast.
+        if (await redis().exists(keys.recent(sessionId, phone))) {
+          setTimeout(() => void sock.readMessages([m.key]).catch(() => undefined), 2000 + Math.random() * 6000);
+        }
         if (STOP_WORDS.test(body)) {
           await optOut(sessionId, phone);
           log.info({ phone }, "opt-out (STOP)");

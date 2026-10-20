@@ -57,10 +57,13 @@ Tiap campaign = rantai job BullMQ `tick`. Satu tick = maksimal **satu** pesan:
 2. di dalam jam kirim (default 08–20 WIB)? kalau tidak → tunda sampai jam buka (+jitter)
 3. batas harian = `min(daily_limit, warm-up)` dan batas per jam — counter di Redis (O(1)), dibagi semua campaign pada nomor yang sama
 4. **klaim jeda per nomor** (`SET NX PX gap`) — atomik; dua campaign/API di nomor yang sama tidak bisa menembus jeda
-5. ambil penerima → cek blacklist → `onWhatsApp()` → simulasi mengetik → kirim
-6. istirahat panjang tiap N pesan (batch)
-7. 5 kegagalan beruntun → campaign auto-pause
-8. balasan “STOP” → blacklist otomatis
+5. ambil penerima → cek blacklist → **sudah dikirimi <24 jam? skip** → `onWhatsApp()` (cache 7 hari) → simulasi mengetik → kirim
+6. istirahat panjang tiap N pesan (N diacak ±25% supaya pola tidak kaku)
+7. 5 kegagalan beruntun → campaign auto-pause; nomor logout/403 dari WA → semua campaign nomor itu auto-pause
+8. balasan “STOP” → blacklist otomatis; balasan dari penerima ditandai dibaca setelah jeda manusiawi
+9. **satu nomor = satu socket**: lock `wa:owner:{session}` di Redis mencegah dua instance worker memegang nomor yang sama
+
+Semua pengaman bersama (cek nomor, typing, counter, recent, warm-up) ada di `messaging/safety.worker.ts` dan dipakai broadcast maupun API.
 
 Rantai tersimpan di Redis (AOF aktif) → selamat dari restart.
 
@@ -75,6 +78,7 @@ Postgres tetap sumber kebenaran untuk semua data bisnis.
 ## Belum ada (ide lanjutan)
 
 - Webhook keluar (pesan masuk / status) — pesan masuk sudah dicatat di tabel `messages`, tinggal antrian pengirim webhook.
+- Kirim ke grup & `/send-document` (kompatibilitas gateway lama) — belum didukung.
 - Kirim media (gambar/dokumen), tombol, dan penjadwalan campaign pada waktu tertentu.
 - Multi-worker dengan sharding sesi (lock per sesi di Redis).
 - Dashboard grafik per hari, ekspor CSV laporan.

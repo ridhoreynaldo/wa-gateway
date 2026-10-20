@@ -75,3 +75,10 @@ export async function transition(id: string, to: "running" | "paused" | "cancell
 }
 
 export const deleteCampaign = (id: string) => db().delete(campaigns).where(eq(campaigns.id, id));
+
+/** Dipanggil worker saat nomor logout/diblokir: semua campaign berjalan di sesi itu dijeda. */
+export const pauseCampaignsForSession = (sessionId: string, reason: string) =>
+  db()
+    .update(campaigns)
+    .set({ status: "paused", pauseReason: reason })
+    .where(and(eq(campaigns.sessionId, sessionId), eq(campaigns.status, "running")));

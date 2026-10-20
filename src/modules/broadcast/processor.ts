@@ -8,13 +8,13 @@ import { waSessions } from "@/modules/wa-sessions/schema";
 import { getSocket } from "@/modules/wa-sessions/runtime/manager";
 import { blacklist } from "@/modules/lists/schema";
 import { logOutgoing } from "@/modules/messaging/repository";
+import { afterSend, existsOnWhatsApp, humanTyping, wasRecentlyMessaged } from "@/modules/messaging/safety.worker";
 import { campaignRecipients, campaigns } from "./schema";
 import { inWindow, localParts, msUntilNextHour, msUntilWindow, rand, warmupLimit } from "./limits";
 import { renderTemplate } from "./template";
 import { scheduleTick } from "./scheduler";
 
 const MAX_CONSECUTIVE_FAILURES = 5;
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /** Satu tick = paling banyak SATU pesan terkirim. Semua aturan keamanan dicek di sini. */
 export async function processTick(job: Job<{ campaignId: string }>): Promise<void> {
@@ -49,7 +49,7 @@ export async function processTick(job: Job<{ campaignId: string }>): Promise<voi
       return;
     }
 
-    // 3) batas harian (termasuk warm-up) & per jam — hitungan di Redis (O(1)), dishare semua campaign di sesi yang sama
+    // 3) batas harian (termasuk warm-up) & per jam — counter di Redis (O(1)), dishare semua campaign/API di sesi yang sama
     const dayK = keys.dayCount(s.id, now.dayKey);
     const hourK = keys.hourCount(s.id, now.hourKey);
     const [dayN, hourN] = (await r.mget(dayK, hourK)).map((v) => Number(v ?? 0)) as [number, number];
@@ -65,7 +65,9 @@ export async function processTick(job: Job<{ campaignId: string }>): Promise<voi
     }
 
     // 4) jeda antar pesan per NOMOR: klaim atomik. Gagal klaim = ada pesan lain baru terkirim dari nomor ini.
-    const batchEnd = c.batchProgress + 1 >= c.batchSize;
+    //    Ukuran batch diacak ±25% supaya pola "istirahat tiap N pesan" tidak kaku.
+    const batchTarget = Math.max(3, Math.round(c.batchSize * rand(0.75, 1.25)));
+    const batchEnd = c.batchProgress + 1 >= batchTarget;
     const gapMs = batchEnd ? rand(c.batchPauseMinSec, c.batchPauseMaxSec) * 1000 : rand(c.minDelaySec, c.maxDelaySec) * 1000;
     const claimK = keys.sendClaim(s.id);
     if (!(await r.set(claimK, "1", "PX", Math.round(gapMs), "NX"))) {
@@ -103,27 +105,24 @@ export async function processTick(job: Job<{ campaignId: string }>): Promise<voi
     const [bl] = await db().select({ p: blacklist.phone }).from(blacklist).where(and(eq(blacklist.ownerId, c.ownerId), eq(blacklist.phone, rec.phone))).limit(1);
     if (bl) return skip("opt-out");
 
-    // 7) nomor terdaftar di WhatsApp?
-    const jid = phoneToJid(rec.phone);
-    try {
-      const check = (await sock.onWhatsApp(jid))?.[0];
-      if (!check?.exists) return skip("tidak terdaftar di WhatsApp");
-    } catch (e) {
-      log.warn(e, "onWhatsApp gagal, lanjut kirim");
-    }
+    // 7) sudah dikirimi dari nomor ini <24 jam (campaign lain / API)? → jangan dobel
+    if (await wasRecentlyMessaged(s.id, rec.phone)) return skip("sudah dikirimi <24 jam");
 
-    // 8) kirim dengan simulasi mengetik
+    // 8) nomor terdaftar di WhatsApp? (hasil di-cache 7 hari)
+    const exists = await existsOnWhatsApp(sock, rec.phone);
+    if (exists === false) return skip("tidak terdaftar di WhatsApp");
+    if (exists === null) log.warn({ phone: rec.phone }, "onWhatsApp gagal, lanjut kirim");
+
+    // 9) kirim dengan simulasi mengetik
+    const jid = phoneToJid(rec.phone);
     const text = renderTemplate(c.template, { ...rec.vars, name: rec.name ?? rec.vars.name ?? "" });
     try {
-      await sock.sendPresenceUpdate("composing", jid);
-      await sleep(Math.min(9000, 700 + text.length * 35 + rand(300, 1500)));
-      await sock.sendPresenceUpdate("paused", jid);
+      await humanTyping(sock, jid, text);
       const sent = await sock.sendMessage(jid, { text });
 
-      await r.multi().incr(dayK).expire(dayK, 172_800).incr(hourK).expire(hourK, 7200).exec();
+      await afterSend(s.id, rec.phone, now.dayKey, now.hourKey);
       await db().update(campaignRecipients).set({ status: "sent", sentAt: new Date(), error: null }).where(eq(campaignRecipients.id, rec.id));
       await logOutgoing({ sessionId: s.id, phone: rec.phone, body: text, waMessageId: sent?.key.id ?? undefined, campaignId: c.id });
-      if (!s.warmupStartedAt) await db().update(waSessions).set({ warmupStartedAt: new Date() }).where(eq(waSessions.id, s.id));
 
       const [u] = await db()
         .update(campaigns)
@@ -151,7 +150,10 @@ export async function processTick(job: Job<{ campaignId: string }>): Promise<voi
         .returning({ cf: campaigns.consecutiveFailures });
       if ((u?.cf ?? 0) >= MAX_CONSECUTIVE_FAILURES) {
         // proteksi akun: berhenti otomatis kalau gagal beruntun
-        await db().update(campaigns).set({ status: "paused", pauseReason: `Auto-pause: ${MAX_CONSECUTIVE_FAILURES} kegagalan beruntun (${msg.slice(0, 100)})` }).where(eq(campaigns.id, c.id));
+        await db()
+          .update(campaigns)
+          .set({ status: "paused", pauseReason: `Auto-pause: ${MAX_CONSECUTIVE_FAILURES} kegagalan beruntun (${msg.slice(0, 100)})` })
+          .where(eq(campaigns.id, c.id));
         return;
       }
       await scheduleTick(c.id, gapMs);
