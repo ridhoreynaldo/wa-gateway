@@ -1,0 +1,44 @@
+{
+  "name": "wa-gateway",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "dev": "next dev",
+    "dev:worker": "tsx watch --env-file=.env worker/index.ts",
+    "build": "next build",
+    "build:worker": "node scripts/build-worker.mjs",
+    "start": "next start",
+    "start:worker": "node dist/worker.mjs",
+    "typecheck": "tsc --noEmit",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "tsx --env-file=.env scripts/migrate.ts",
+    "db:studio": "drizzle-kit studio"
+  },
+  "dependencies": {
+    "@whiskeysockets/baileys": "7.0.0-rc14",
+    "bullmq": "^6.3.17",
+    "drizzle-orm": "^0.45.4",
+    "ioredis": "^5.8.2",
+    "next": "16.4.2",
+    "pino": "^9.6.0",
+    "postgres": "^3.4.9",
+    "qrcode": "^1.5.4",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4.3.3",
+    "@types/node": "^22.19.0",
+    "@types/qrcode": "^1.5.6",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "drizzle-kit": "^0.31.11",
+    "esbuild": "^0.25.12",
+    "tailwindcss": "^4.3.3",
+    "tsx": "^4.23.15",
+    "typescript": "^5.9.3"
+  }
+}

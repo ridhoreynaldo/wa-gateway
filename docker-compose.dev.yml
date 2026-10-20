@@ -1,0 +1,35 @@
+# Dev lokal: hanya infrastruktur. Aplikasi dijalankan dengan `npm run dev` & `npm run dev:worker`.
+#   docker compose -f docker-compose.dev.yml up -d
+# Di .env dev gunakan:
+#   DATABASE_URL=postgres://wagw:dev@127.0.0.1:6432/wagw
+#   DATABASE_URL_DIRECT=postgres://wagw:dev@127.0.0.1:5432/wagw
+#   REDIS_URL=redis://127.0.0.1:6379
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment: { POSTGRES_USER: wagw, POSTGRES_PASSWORD: dev, POSTGRES_DB: wagw }
+    ports: ["127.0.0.1:5432:5432"]
+    volumes: [pgdata-dev:/var/lib/postgresql/data]
+  pgbouncer:
+    image: edoburu/pgbouncer:latest
+    depends_on: [postgres]
+    environment:
+      DB_HOST: postgres
+      DB_USER: wagw
+      DB_PASSWORD: dev
+      DB_NAME: wagw
+      LISTEN_PORT: "6432"
+      POOL_MODE: transaction
+      AUTH_TYPE: scram-sha-256
+      IGNORE_STARTUP_PARAMETERS: extra_float_digits,options
+    ports: ["127.0.0.1:6432:6432"]
+  redis:
+    image: redis:7-alpine
+    command: redis-server --maxmemory-policy noeviction --appendonly yes
+    ports: ["127.0.0.1:6379:6379"]
+    volumes: [redisdata-dev:/data]
+
+volumes:
+  pgdata-dev:
+  redisdata-dev:
