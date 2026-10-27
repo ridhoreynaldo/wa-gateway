@@ -3,11 +3,11 @@ import { z } from "zod";
 import { logger } from "@/shared/logger";
 import { newRedis, redis, keys } from "@/shared/redis";
 import { QUEUES } from "@/shared/queue";
-import { bootSessions, logoutSession, resync, shutdownAll, startSession, stopSession } from "@/modules/wa-sessions/runtime/manager";
+import { bootSessions, logoutSession, resetSession, resync, shutdownAll, startSession, stopSession } from "@/modules/wa-sessions/runtime/manager";
 import { processTick } from "@/modules/broadcast/processor";
 import { markDirectFailed, processDirect } from "@/modules/messaging/direct.worker";
 
-const cmdSchema = z.object({ type: z.enum(["start", "stop", "logout", "resync"]), sessionId: z.string().uuid() });
+const cmdSchema = z.object({ type: z.enum(["start", "stop", "logout", "resync", "reset"]), sessionId: z.string().uuid() });
 
 async function main() {
   const conn = newRedis();
@@ -19,7 +19,7 @@ async function main() {
     try {
       const cmd = cmdSchema.parse(JSON.parse(raw));
       logger.info(cmd, "command");
-      const run = { start: startSession, stop: stopSession, logout: logoutSession, resync }[cmd.type];
+      const run = { start: startSession, stop: stopSession, logout: logoutSession, resync, reset: resetSession }[cmd.type];
       void run(cmd.sessionId).catch((e) => logger.error(e, "command gagal"));
     } catch (e) {
       logger.warn(e, "command tidak valid");

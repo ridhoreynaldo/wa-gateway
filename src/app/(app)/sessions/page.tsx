@@ -1,7 +1,7 @@
 import { ownerScope, requirePermission } from "@/modules/auth/guards";
 import {
   connectSessionAction, createSessionAction, deleteSessionAction, disconnectSessionAction,
-  logoutSessionAction, resyncSessionAction,
+  logoutSessionAction, resetSessionAction, resyncSessionAction,
 } from "@/modules/wa-sessions/actions";
 import { listSessions } from "@/modules/wa-sessions/repository";
 import { warmupLimit } from "@/modules/broadcast/limits";
@@ -52,6 +52,14 @@ export default async function SessionsPage() {
                         <form action={resyncSessionAction}><input type="hidden" name="id" value={s.id} /><button className={btnGhost}>Sync grup</button></form>
                         <form action={disconnectSessionAction}><input type="hidden" name="id" value={s.id} /><button className={btnGhost}>Putus</button></form>
                         <form action={logoutSessionAction}><input type="hidden" name="id" value={s.id} /><button className={btnGhost}>Logout WA</button></form>
+                      </>
+                    )}
+                    {(s.status === "connecting" || s.status === "qr" || s.status === "disconnected") && (
+                      <>
+                        {s.status !== "disconnected" && (
+                          <form action={disconnectSessionAction}><input type="hidden" name="id" value={s.id} /><button className={btnGhost}>Putus</button></form>
+                        )}
+                        <form action={resetSessionAction}><input type="hidden" name="id" value={s.id} /><button className={btnGhost}>Reset (hapus data sesi)</button></form>
                       </>
                     )}
                     <form action={deleteSessionAction}><input type="hidden" name="id" value={s.id} /><button className={btnDanger}>Hapus</button></form>

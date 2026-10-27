@@ -28,6 +28,14 @@ const manualStop = new Set<string>();
 const attempts = new Map<string, number>();
 const qrRounds = new Map<string, number>();
 const MAX_QR_ROUNDS = 6; // ±6 menit; lewat itu berhenti supaya tidak loop selamanya
+const timers = new Map<string, NodeJS.Timeout>();
+const MAX_ATTEMPTS = 20; // reconnect gagal beruntun ±10 menit → menyerah, jangan "connecting" selamanya
+
+function clearTimer(id: string) {
+  const t = timers.get(id);
+  if (t) clearTimeout(t);
+  timers.delete(id);
+}
 
 export const getSocket = (sessionId: string) => sockets.get(sessionId)?.sock;
 
@@ -56,6 +64,7 @@ function dropEntry(id: string) {
 export async function startSession(id: string): Promise<void> {
   if (sockets.has(id) || starting.has(id)) return;
   starting.add(id);
+  clearTimer(id);
   manualStop.delete(id);
   qrRounds.delete(id); // mulai fresh; bug lama: hitungan QR lama ikut terbawa → langsung berhenti
   const log = logger.child({ session: id });
@@ -118,10 +127,24 @@ export async function startSession(id: string): Promise<void> {
           }
           const n = (attempts.get(id) ?? 0) + 1;
           attempts.set(id, n);
+          if (n > MAX_ATTEMPTS) {
+            // Menyerah: status dibuat jelas supaya user bisa Reset / Hubungkan manual,
+            // bukan "connecting" palsu selamanya (itu yang bikin sesi nyangkut).
+            log.error({ code, n }, "reconnect menyerah setelah gagal beruntun");
+            attempts.delete(id);
+            await releaseOwner(id);
+            await setStatus(id, "disconnected");
+            return;
+          }
           const delay = Math.min(30_000, 1000 * 2 ** Math.min(n, 5));
           log.warn({ code, n, delay }, "terputus, reconnect");
           await setStatus(id, "connecting");
-          setTimeout(() => void startSession(id), delay);
+          clearTimer(id);
+          timers.set(id, setTimeout(() => {
+            timers.delete(id);
+            if (manualStop.has(id)) return; // sudah di-stop/logout/reset user — jangan bangkit lagi
+            void startSession(id);
+          }, delay));
         }
       })().catch((e) => log.error(e, "connection.update handler gagal"));
     });
@@ -137,6 +160,8 @@ export async function startSession(id: string): Promise<void> {
 
 export async function stopSession(id: string): Promise<void> {
   manualStop.add(id);
+  clearTimer(id);
+  attempts.delete(id);
   const e = sockets.get(id);
   dropEntry(id);
   e?.sock.end(undefined);
@@ -147,18 +172,50 @@ export async function stopSession(id: string): Promise<void> {
 
 export async function logoutSession(id: string): Promise<void> {
   manualStop.add(id);
+  clearTimer(id);
+  attempts.delete(id);
+  qrRounds.delete(id);
   const e = sockets.get(id);
   dropEntry(id);
-  try {
-    await e?.sock.logout();
-  } catch {
-    e?.sock.end(undefined);
+  if (e) {
+    try {
+      // Socket yang nyangkut bisa bikin logout() menggantung — batasi 5 detik, lalu putus paksa.
+      await Promise.race([e.sock.logout(), new Promise((res) => setTimeout(res, 5000))]);
+    } catch {
+      // abaikan; socket tetap di-end di bawah
+    }
+    e.sock.end(undefined);
   }
   await pauseCampaignsForSession(id, "Auto-pause: nomor di-logout").catch(() => undefined);
   await wipeAuth(id);
   await redis().del(keys.qr(id));
   await releaseOwner(id);
   await setStatus(id, "logged_out", { phone: null }).catch(() => undefined); // baris bisa sudah dihapus
+}
+
+export async function resetSession(id: string): Promise<void> {
+  // Reset paksa untuk sesi nyangkut ("connecting" terus): putus socket tanpa menunggu WA,
+  // hapus auth di DB (padanan "hapus file data sesi" — auth sekarang disimpan di tabel wa_auth),
+  // bersihkan semua state, akhiri logged_out supaya user bisa scan QR ulang dari bersih.
+  manualStop.add(id);
+  clearTimer(id);
+  attempts.delete(id);
+  qrRounds.delete(id);
+  const e = sockets.get(id);
+  dropEntry(id);
+  if (e) {
+    try {
+      await Promise.race([e.sock.logout(), new Promise((res) => setTimeout(res, 5000))]);
+    } catch {
+      // socket nyangkut memang dibuang paksa
+    }
+    e.sock.end(undefined);
+  }
+  await pauseCampaignsForSession(id, "Auto-pause: sesi di-reset").catch(() => undefined);
+  await wipeAuth(id);
+  await redis().del(keys.qr(id));
+  await releaseOwner(id);
+  await setStatus(id, "logged_out", { phone: null }).catch(() => undefined);
 }
 
 export async function resync(id: string) {
