@@ -53,13 +53,6 @@ export const logoutSessionAction = action(async (form: FormData) => {
   revalidatePath("/sessions");
 });
 
-export const resetSessionAction = action(async (form: FormData) => {
-  const { me, s } = await mine(id(form));
-  await sendCommand({ type: "reset", sessionId: s.id });
-  await audit(me.id, "wa.reset", s.id);
-  revalidatePath("/sessions");
-});
-
 export const deleteSessionAction = action(async (form: FormData) => {
   const { me, s } = await mine(id(form));
   await sendCommand({ type: "logout", sessionId: s.id });
